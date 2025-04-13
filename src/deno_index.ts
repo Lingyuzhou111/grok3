@@ -200,10 +200,40 @@ const handler = async (req: Request): Promise<Response> => {
   headers.set("cookie", cookie);
 
   try {
+    // 解析和验证请求体
+    let requestBody = null;
+    if (req.method !== 'GET') {
+      try {
+        const contentType = req.headers.get('Content-Type') || '';
+        if (contentType.includes('application/json')) {
+          const bodyText = await req.text();
+          console.log('Request body:', bodyText);
+          // 验证JSON格式
+          JSON.parse(bodyText);
+          requestBody = bodyText;
+        } else {
+          requestBody = req.body;
+        }
+      } catch (bodyError) {
+        console.error('Request body parsing error:', bodyError);
+        return new Response(JSON.stringify({
+          error: 'Invalid request body',
+          message: 'Failed to parse request body as JSON'
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    console.log('Proxying request to:', targetUrl.toString());
+    console.log('Request method:', req.method);
+    console.log('Request headers:', Object.fromEntries(headers.entries()));
+
     const proxyResponse = await fetch(targetUrl.toString(), {
       method: req.method,
       headers,
-      body: req.body,
+      body: requestBody,
       redirect: "manual",
     });
 
@@ -241,11 +271,30 @@ const handler = async (req: Request): Promise<Response> => {
       status: proxyResponse.status,
       headers: responseHeaders,
     });
+    // 检查并记录响应状态
+    if (!proxyResponse.ok) {
+      console.error('Proxy response error:', {
+        status: proxyResponse.status,
+        statusText: proxyResponse.statusText,
+        headers: Object.fromEntries(proxyResponse.headers.entries())
+      });
+      const errorBody = await proxyResponse.text();
+      console.error('Error response body:', errorBody);
+    }
+
   } catch (error) {
     console.error('Proxy Error:', error);
+    console.error('Error details:', {
+      url: targetUrl.toString(),
+      method: req.method,
+      headers: Object.fromEntries(headers.entries()),
+      error: error.stack || error.message
+    });
     return new Response(JSON.stringify({
       error: 'Internal server error',
-      message: error.message
+      message: error.message,
+      details: error.stack,
+      url: targetUrl.toString()
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
