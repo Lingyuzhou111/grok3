@@ -1,14 +1,45 @@
 import { serve } from "https://deno.land/std@0.202.0/http/server.ts";
 
 const TARGET_URL = "https://grok.com";
-const ORIGIN_DOMAIN = "grok.com"; // 注意：此处应仅为域名，不含协议
+const ORIGIN_DOMAIN = "grok.com";
 
 const AUTH_USERNAME = Deno.env.get("AUTH_USERNAME");
 const AUTH_PASSWORD = Deno.env.get("AUTH_PASSWORD");
-
 const COOKIE = Deno.env.get("cookie");
 
-// 验证函数
+// 验证cookie是否有效
+function validateCookie(cookie: string): boolean {
+  if (!cookie) return false;
+  const hasCfClearance = cookie.includes("cf_clearance=");
+  const hasSso = cookie.includes("sso=");
+  return hasCfClearance && hasSso;
+}
+
+// 从cookie中提取cf_clearance和sso值
+function extractCookies(cookie: string): { cfClearance: string; sso: string } {
+  const cookies = cookie.split(';').map(c => c.trim());
+  const cfClearance = cookies.find(c => c.startsWith('cf_clearance='))?.split('=')[1] || '';
+  const sso = cookies.find(c => c.startsWith('sso='))?.split('=')[1] || '';
+  return { cfClearance, sso };
+}
+
+// 检查cookie是否即将过期（30分钟内）
+function isCookieExpiringSoon(cfClearance: string): boolean {
+  try {
+    const cookieParts = cfClearance.split('-');
+    if (cookieParts.length >= 2) {
+      const expiryTimestamp = parseInt(cookieParts[1]);
+      const currentTime = Math.floor(Date.now() / 1000);
+      const timeUntilExpiry = expiryTimestamp - currentTime;
+      return timeUntilExpiry < 1800; // 30分钟 = 1800秒
+    }
+  } catch (error) {
+    console.error('Error checking cookie expiry:', error);
+  }
+  return false;
+}
+
+// 验证Basic Auth
 function isValidAuth(authHeader: string): boolean {
   try {
     const base64Credentials = authHeader.split(" ")[1];
@@ -19,9 +50,10 @@ function isValidAuth(authHeader: string): boolean {
     return false;
   }
 }
+
+// 处理WebSocket连接
 async function handleWebSocket(req: Request): Promise<Response> {
   const { socket: clientWs, response } = Deno.upgradeWebSocket(req);
-
   const url = new URL(req.url);
   const targetUrl = `wss://grok.com${url.pathname}${url.search}`;
 
@@ -73,7 +105,7 @@ async function handleWebSocket(req: Request): Promise<Response> {
   return response;
 }
 
-
+// 主处理函数
 const handler = async (req: Request): Promise<Response> => {
   // Basic Auth 验证
   const authHeader = req.headers.get("Authorization");
@@ -86,20 +118,43 @@ const handler = async (req: Request): Promise<Response> => {
     });
   }
 
+  // 处理WebSocket请求
   if (req.headers.get("Upgrade")?.toLowerCase() === "websocket") {
     return handleWebSocket(req);
   }
 
   const url = new URL(req.url);
   const targetUrl = new URL(url.pathname + url.search, TARGET_URL);
+  const cookie = COOKIE || req.headers.get('cookie') || '';
+
+  // Cookie验证
+  if (!validateCookie(cookie)) {
+    return new Response("Unauthorized: Invalid cookie", { status: 401 });
+  }
+
+  // 检查cookie是否即将过期
+  const { cfClearance } = extractCookies(cookie);
+  if (isCookieExpiringSoon(cfClearance)) {
+    console.warn('Cookie is expiring soon');
+    return new Response(JSON.stringify({
+      error: 'Cookie expiring soon',
+      message: 'Please update your cookie'
+    }), {
+      status: 401,
+      headers: {
+        'X-Cookie-Warning': 'Cookie is expiring soon',
+        'Content-Type': 'application/json'
+      }
+    });
+  }
 
   // 构造代理请求
   const headers = new Headers(req.headers);
   headers.set("Host", targetUrl.host);
   headers.delete("Referer");
   headers.delete("Cookie");
-  headers.delete("Authorization"); // 删除验证头，不转发到目标服务器
-  headers.set("cookie", COOKIE || '');
+  headers.delete("Authorization");
+  headers.set("cookie", cookie);
 
   try {
     const proxyResponse = await fetch(targetUrl.toString(), {
@@ -111,7 +166,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     // 处理响应头
     const responseHeaders = new Headers(proxyResponse.headers);
-    responseHeaders.delete("Content-Length"); // 移除固定长度头
+    responseHeaders.delete("Content-Length");
     const location = responseHeaders.get("Location");
     if (location) {
       responseHeaders.set("Location", location.replace(TARGET_URL, `https://${ORIGIN_DOMAIN}`));
@@ -128,15 +183,6 @@ const handler = async (req: Request): Promise<Response> => {
         const contentType = responseHeaders.get("Content-Type") || "";
         if (contentType.startsWith("text/") || contentType.includes("json")) {
           let text = new TextDecoder("utf-8", { stream: true }).decode(chunk);
-
-          //   if(contentType.includes("json"))
-          //   {
-          //       if(text.includes("streamingImageGenerationResponse"))
-          //       {
-          //           text = text.replaceAll('users/','https://assets.grok.com/users/');
-          //       }
-          //   }
-
           controller.enqueue(
             new TextEncoder().encode(text.replaceAll(TARGET_URL, ORIGIN_DOMAIN))
           );
@@ -146,7 +192,6 @@ const handler = async (req: Request): Promise<Response> => {
       }
     });
 
-    // 创建可读流
     const readableStream = proxyResponse.body?.pipeThrough(transformStream);
 
     return new Response(readableStream, {
@@ -154,8 +199,16 @@ const handler = async (req: Request): Promise<Response> => {
       headers: responseHeaders,
     });
   } catch (error) {
-    return new Response(`Proxy Error: ${error.message}`, { status: 500 });
+    console.error('Proxy Error:', error);
+    return new Response(JSON.stringify({
+      error: 'Internal server error',
+      message: error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 };
 
 serve(handler, { port: 8000 });
+console.log('Grok proxy server running on http://localhost:8000');
