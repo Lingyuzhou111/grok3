@@ -60,28 +60,6 @@ function extractCookies(cookie: string): { cfClearance: string; sso: string } {
   return { cfClearance, sso };
 }
 
-// 检查cookie是否即将过期（30分钟内）
-function isCookieExpiringSoon(cfClearance: string): boolean {
-  try {
-    const cookieParts = cfClearance.split('-');
-    if (cookieParts.length >= 2) {
-      const expiryTimestamp = parseInt(cookieParts[1]);
-      const currentTime = Math.floor(Date.now() / 1000);
-      const timeUntilExpiry = expiryTimestamp - currentTime;
-      
-      // 如果cookie即将过期且距离上次刷新已超过间隔时间
-      if (timeUntilExpiry < 7200 && (Date.now() - lastCookieRefreshTime) > REFRESH_INTERVAL) {
-        refreshCookie().catch(console.error);
-      }
-      
-      return timeUntilExpiry < 7200; // 2小时 = 7200秒
-    }
-  } catch (error) {
-    console.error('Error checking cookie expiry:', error);
-  }
-  return false;
-}
-
 // 验证Basic Auth
 function isValidAuth(authHeader: string): boolean {
   try {
