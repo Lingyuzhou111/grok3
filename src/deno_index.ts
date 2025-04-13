@@ -7,6 +7,43 @@ const AUTH_USERNAME = Deno.env.get("AUTH_USERNAME");
 const AUTH_PASSWORD = Deno.env.get("AUTH_PASSWORD");
 const COOKIE = Deno.env.get("cookie");
 
+// 存储cookie刷新状态
+let lastCookieRefreshTime = 0;
+let isRefreshing = false;
+const REFRESH_INTERVAL = 7200000; // 2小时
+const MAX_RETRIES = 3;
+
+// 自动刷新cookie
+async function refreshCookie(): Promise<string> {
+  if (isRefreshing) return COOKIE || '';
+  isRefreshing = true;
+  
+  try {
+    const response = await fetch(`${TARGET_URL}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Cookie': COOKIE || '',
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (response.ok) {
+      const cookies = response.headers.get('set-cookie');
+      if (cookies) {
+        await Deno.env.set('cookie', cookies);
+        lastCookieRefreshTime = Date.now();
+        return cookies;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to refresh cookie:', error);
+  } finally {
+    isRefreshing = false;
+  }
+  
+  return COOKIE || '';
+}
+
 // 验证cookie是否有效
 function validateCookie(cookie: string): boolean {
   if (!cookie) return false;
@@ -31,7 +68,13 @@ function isCookieExpiringSoon(cfClearance: string): boolean {
       const expiryTimestamp = parseInt(cookieParts[1]);
       const currentTime = Math.floor(Date.now() / 1000);
       const timeUntilExpiry = expiryTimestamp - currentTime;
-      return timeUntilExpiry < 1800; // 30分钟 = 1800秒
+      
+      // 如果cookie即将过期且距离上次刷新已超过间隔时间
+      if (timeUntilExpiry < 7200 && (Date.now() - lastCookieRefreshTime) > REFRESH_INTERVAL) {
+        refreshCookie().catch(console.error);
+      }
+      
+      return timeUntilExpiry < 7200; // 2小时 = 7200秒
     }
   } catch (error) {
     console.error('Error checking cookie expiry:', error);
