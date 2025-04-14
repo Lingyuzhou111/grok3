@@ -6,8 +6,7 @@ const ORIGIN_DOMAIN = "grok.com"; // 注意：此处应仅为域名，不含协�
 const AUTH_USERNAME = Deno.env.get("AUTH_USERNAME");
 const AUTH_PASSWORD = Deno.env.get("AUTH_PASSWORD");
 
-// 硬编码cookie用于测试，之后可以改回环境变量获取
-const COOKIE = "Eyq58UDKcWtq0IaaruABUcqKaAEwbf1CppfszyKQ2Uo-1744604876-1.2.1.1-OpgZaeFk9uq_v7ekej0qzCiJenU.gMvelbCDUTxRqAwPMGqGwWiWQL8AnvRWALHRTQGd2Dq32MnzsdtIeRp4qVOY9yIFgtOcQPhVsOrdig.MfM7QNbB9qhWQx8A0SEBG2EzBxkWnOTlOqC3n2ROZ2BC2NwQsoQNSxLknQjk.9TvBmKfnlGy_vr5FA.h3W7VqNpHcdOWdhmD1G11vfvdBV6H8NEbtBzAxyXh5GQxAv_clAx0z4SDrwIyJPgwgF1.CbFu.bYWLdrzEUr97F2SWxfly52sqrgV6urIIlWHgOLlCk3Ic1WLhks4._nPNsnV.iy8gmQ12YXDjan5sKgAdXZBqp4AHCddHhgHMQQkVzPM; sso=eyJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uX2lkIjoiZTBlZTNmY2QtODEwYS00ZjlmLWJmM2UtMmRmMjNiYTRmYjhlIn0.LguKS93ZEXYL1fkz4Z8Yowfs7lwakbHgiNIFVX4ujrM";
+const COOKIE = Deno.env.get("cookie");
 
 // 验证函数
 function isValidAuth(authHeader: string): boolean {
@@ -101,14 +100,7 @@ const handler = async (req: Request): Promise<Response> => {
   headers.delete("Referer");
   headers.delete("Cookie");
   headers.delete("Authorization"); // 删除验证头，不转发到目标服务器
-  
-  // 确保cookie被正确设置，使用硬编码的cookie值
-  if (COOKIE) {
-    console.log('Setting cookie header');
-    headers.set("cookie", COOKIE);
-  } else {
-    console.log('No cookie available');
-  }
+  headers.set("cookie", COOKIE || '');
 
   try {
     console.log('Proxying request to:', targetUrl.toString());
