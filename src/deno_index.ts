@@ -19,6 +19,7 @@ async function refreshCookie(): Promise<string> {
   isRefreshing = true;
   
   try {
+    console.log('Attempting to refresh cookie...');
     const response = await fetch(`${TARGET_URL}/api/auth/refresh`, {
       method: 'POST',
       headers: {
@@ -30,9 +31,21 @@ async function refreshCookie(): Promise<string> {
     if (response.ok) {
       const cookies = response.headers.get('set-cookie');
       if (cookies) {
+        console.log('Cookie refreshed successfully');
         await Deno.env.set('cookie', cookies);
         lastCookieRefreshTime = Date.now();
         return cookies;
+      } else {
+        console.warn('No cookies in refresh response');
+      }
+    } else {
+      console.error(`Cookie refresh failed with status: ${response.status}`);
+      // 尝试读取错误响应内容
+      try {
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+      } catch (e) {
+        console.error('Could not read error response');
       }
     }
   } catch (error) {
@@ -60,7 +73,7 @@ function extractCookies(cookie: string): { cfClearance: string; sso: string } {
   return { cfClearance, sso };
 }
 
-// 检查cookie是否即将过期（2小时内）
+// 检查cookie是否即将过期（完全禁用过期检测）
 function isCookieExpiringSoon(cfClearance: string): boolean {
   try {
     const cookieParts = cfClearance.split('-');
@@ -69,16 +82,16 @@ function isCookieExpiringSoon(cfClearance: string): boolean {
       const currentTime = Math.floor(Date.now() / 1000);
       const timeUntilExpiry = expiryTimestamp - currentTime;
       
-      // 如果cookie即将过期且距离上次刷新已超过间隔时间
-      if (timeUntilExpiry < 7200 && (Date.now() - lastCookieRefreshTime) > REFRESH_INTERVAL) {
-        refreshCookie().catch(console.error);
+      // 仅在后台尝试刷新cookie，但不影响请求处理
+      if (timeUntilExpiry < 3600 && (Date.now() - lastCookieRefreshTime) > REFRESH_INTERVAL) {
+        // 异步刷新cookie，不阻塞当前请求
+        setTimeout(() => refreshCookie().catch(console.error), 0);
       }
-      
-      return timeUntilExpiry < 7200; // 2小时 = 7200秒
     }
   } catch (error) {
     console.error('Error checking cookie expiry:', error);
   }
+  // 始终返回false，完全禁用过期检测，避免401错误
   return false;
 }
 
@@ -177,19 +190,12 @@ const handler = async (req: Request): Promise<Response> => {
 
   // 检查cookie是否即将过期
   const { cfClearance } = extractCookies(cookie);
-  if (isCookieExpiringSoon(cfClearance)) {
-    console.warn('Cookie is expiring soon');
-    return new Response(JSON.stringify({
-      error: 'Cookie expiring soon',
-      message: 'Please update your cookie'
-    }), {
-      status: 401,
-      headers: {
-        'X-Cookie-Warning': 'Cookie is expiring soon',
-        'Content-Type': 'application/json'
-      }
-    });
+  // 完全禁用cookie过期检查，即使cookie即将过期也继续处理请求
+  // 在后台异步刷新cookie
+  if (cfClearance) {
+    setTimeout(() => refreshCookie().catch(console.error), 0);
   }
+  // 不再返回401错误，继续处理请求
 
   // 构造代理请求
   const headers = new Headers(req.headers);
